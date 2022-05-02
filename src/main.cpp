@@ -36,6 +36,7 @@ struct Player {
 
 enum {
     STATE_TITLE_SCREEN,
+    STATE_TUTORIAL,
     STATE_PLAYING,
     STATE_PLAYER_DIED,
     STATE_LEADERBOARD,
@@ -44,6 +45,8 @@ enum {
 struct Game {
     int     state;
     int     score;
+
+    int     tutorial_happened;
 
     float   state_change_timer;
     float   state_change_max;
@@ -107,8 +110,8 @@ static Ground grounds[4];
 static Game game;
 static Font main_font;
 static Font bigger_font;
-const int MAINFONTSIZE = 64;
-const int BIGFONTSIZE  = 128;
+const int MAINFONTSIZE = 58;
+const int BIGFONTSIZE  = 96;
 
 enum {
     SOUND_GOT_HIT,
@@ -119,6 +122,7 @@ enum {
 };
 
 static Sound sounds[8];
+static Music game_music;
 
 inline float timescaled_dt() {
     return game.timescale * 0.016;
@@ -158,6 +162,31 @@ void do_debug_draw() {
             pos.y += 10;
         }
     }
+}
+
+void update_music() {
+    static float music_fade = 0;
+    if (!IsMusicStreamPlaying(game_music)) {
+        PlayMusicStream(game_music);
+        SeekMusicStream(game_music, 0);
+    }
+
+    if ((GetMusicTimeLength(game_music) - GetMusicTimePlayed(game_music)) < 0.25) {
+        SeekMusicStream(game_music, 0);
+    }
+
+    float last_frame = music_fade;
+    music_fade = Lerp(music_fade, !!(game.state == STATE_PLAYING), 0.05);
+
+    if(last_frame == 0.0 && game.state == STATE_PLAYING) {
+        ResumeMusicStream(game_music);
+    }
+    else if(music_fade == 0.0 && game.state != STATE_PLAYING) {
+        PauseMusicStream(game_music);
+    }
+
+    SetMusicPitch(game_music, music_fade);
+    UpdateMusicStream(game_music);
 }
 
 void change_game_state(int state, float time) {
@@ -205,16 +234,18 @@ void perform_player_death() {
     game.combo_timer = 0;
 
     int found = -1;
+    int minimum = game.score;
     for(int i = 0; i < sizeof(game.high_score) / sizeof(int); ++i) {
-        if (game.high_score[i] < game.score) {
+        if (game.high_score[i] < minimum) {
             found = i;
+            minimum = game.high_score[i];
         }
     }
     if (found != -1) {
         game.high_score[found] = game.score;
     }
 
-    qsort(game.high_score, sizeof(int), sizeof(game.high_score) / sizeof(int), scoresort);
+    qsort(game.high_score, sizeof(game.high_score) / sizeof(int), sizeof(int), scoresort);
     change_game_state(STATE_PLAYER_DIED, 1.0);
 }
 
@@ -426,6 +457,7 @@ void do_player_update() {
 static Interval enemy_spawn_interval = Interval(1.0);
 
 void game_update() {
+    update_music();
     if (game.camerashake > 0) {
         game.camerashake -= timescaled_dt();
         if (game.camerashake < 0) game.camerashake = 0;
@@ -434,7 +466,7 @@ void game_update() {
         camera.offset.y = GetRandomValue(1, 50) * game.camerashake;
     }
 
-    if(game.timescale < 1.0) game.timescale += (0.10);
+    if(game.timescale < 1.0) game.timescale += 0.5;
     else if(game.timescale > 1.0) game.timescale = 0;
 
     game.state_change_timer -= timescaled_dt();
@@ -445,12 +477,47 @@ void game_update() {
     Vector2 mouse = GetMousePosition();
 
     switch(game.state) {
-        case STATE_PLAYER_DIED:
-        case STATE_TITLE_SCREEN:
+        case STATE_LEADERBOARD:
         {
             if (game.state_change_timer <= 0.0) {
                 if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
                     change_game_state(STATE_PLAYING, 0.5);
+                }
+            }
+            update_player_input(axis_x, 0, mouse);
+            do_player_update();
+        } break;
+
+        case STATE_TUTORIAL:
+        {
+            if (game.state_change_timer <= 0.0) {
+                game.tutorial_happened = 1;
+                if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                    change_game_state(STATE_PLAYING, 0.5);
+                }
+            }
+            update_player_input(axis_x, 0, mouse);
+            do_player_update();
+        } break;
+
+        case STATE_PLAYER_DIED:
+        {
+            if (game.state_change_timer <= 0.0) {
+                if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                    change_game_state(STATE_PLAYING, 0.5);
+                }
+                if (IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) {
+                    change_game_state(STATE_LEADERBOARD, 0.5);
+                }
+            }
+            update_player_input(axis_x, 0, mouse);
+            do_player_update();
+        } break;
+        case STATE_TITLE_SCREEN:
+        {
+            if (game.state_change_timer <= 0.0) {
+                if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                    change_game_state(game.tutorial_happened ? STATE_PLAYING : STATE_TUTORIAL, 0.5);
                 }
             }
             update_player_input(axis_x, 0, mouse);
@@ -479,7 +546,7 @@ void game_update() {
                         e->position.y = GetRandomValue((int)(MAP_Y_BEGIN + TILE_SIZE), (int)(MAP_Y_END - TILE_SIZE));
                         e->target = e->position;
 
-                        // PlaySoundMulti(sounds[SOUND_SPAWN_ENEMY]);
+                        PlaySoundMulti(sounds[SOUND_SPAWN_ENEMY]);
                     }
                 }
 
@@ -583,10 +650,6 @@ void draw_game_screen(RenderTexture2D game_tex) {
             const char *text    = "Maglatch";
             const char *subtext = "Click left mouse to begin.";
 
-            const char *tut0 = "A/D - move left/right";
-            const char *tut1 = "LMB(Hold) - Charge Jump";
-            const char *tut2 = "LMB(Release) - Jump to Wall";
-
             Vector2 size = MeasureTextEx(bigger_font, text, BIGFONTSIZE, 0);
             float x = MAP_X_CENTER - (size.x * 0.5);
             float y = (MAP_Y_CENTER * 0.75) - (size.y * 0.5);
@@ -594,35 +657,20 @@ void draw_game_screen(RenderTexture2D game_tex) {
             DrawTextEx(bigger_font, text,    {x,y}, BIGFONTSIZE, 0, c);
 
             y += size.y;
-            {
-                Vector2 size = MeasureTextEx(main_font, subtext, MAINFONTSIZE, 0);
-                x = MAP_X_CENTER - (size.x * 0.5);
-                DrawTextEx(main_font, subtext, {x,y}, MAINFONTSIZE, 0, c);
+        } break;
 
-                y += size.y;
-            }
-            {
-
-                Vector2 size = MeasureTextEx(main_font, tut0, MAINFONTSIZE, 0);
-                x = MAP_X_CENTER - (size.x * 0.5);
-                DrawTextEx(main_font, tut0, {x,y}, MAINFONTSIZE, 0, c);
-
-                y += size.y;
-            }
-            {
-                Vector2 size = MeasureTextEx(main_font, tut1, MAINFONTSIZE, 0);
-                x = MAP_X_CENTER - (size.x * 0.5);
-                DrawTextEx(main_font, tut1, {x,y}, MAINFONTSIZE, 0, c);
-
-                y += size.y;
-            }
-            {
-                Vector2 size = MeasureTextEx(main_font, tut2, MAINFONTSIZE, 0);
-                x = MAP_X_CENTER - (size.x * 0.5);
-                DrawTextEx(main_font, tut2, {x,y}, MAINFONTSIZE, 0, c);
-
-                y += size.y;
-            }
+        case STATE_TUTORIAL:
+        {
+            const char *message = {
+                "LMB to charge the magnet beam",
+                "",
+                "Release LMB when beam is hitting the wall to",
+                "perform wall jump.",
+                "",
+                "any enemy inside the beam's area will be a score!",
+                "",
+                "Don't get hit by enemy bullet!",
+            };
         } break;
 
         case STATE_PLAYER_DIED:
@@ -731,6 +779,7 @@ int main(int argc, char **argv) {
     game.timescale = 1;
 
     camera.zoom = 1;
+    camera.rotation = 0;
     player.normal = { 0, -1 };
     player.size = { TILE_SIZE, TILE_SIZE };
 
@@ -757,12 +806,14 @@ int main(int argc, char **argv) {
     sounds[SOUND_SHOT_BULLET] = LoadSound("assets/sounds/bullet_shot.wav");
     sounds[SOUND_ENEMY_DIED] = LoadSound("assets/sounds/enemy_died.wav");
     sounds[SOUND_TELEPORTED] = LoadSound("assets/sounds/teleport.wav");
+    sounds[SOUND_SPAWN_ENEMY] = LoadSound("assets/sounds/enemy_spawn.wav");
+    game_music = LoadMusicStream("assets/sounds/bgm.wav");
 
     float accum = 0;
     RenderTexture2D game_tex = LoadRenderTexture(1200, 900);
     SetTextureFilter(game_tex.texture, TEXTURE_FILTER_BILINEAR);
 
-    main_font = LoadFontEx("assets/fonts/Poppins-SemiBold.ttf", MAINFONTSIZE, 0, 0);
+    main_font = LoadFontEx("assets/fonts/Poppins-Regular.ttf", MAINFONTSIZE, 0, 0);
     bigger_font = LoadFontEx("assets/fonts/Poppins-SemiBold.ttf", BIGFONTSIZE, 0, 0);
 
     change_game_state(STATE_TITLE_SCREEN, 1.0);
@@ -784,10 +835,8 @@ int main(int argc, char **argv) {
 
         Rectangle swapped = { 0.0f, 0.0f, (float)game_tex.texture.width, (float)-game_tex.texture.height};
         Rectangle to = {MAP_X_CENTER, MAP_Y_CENTER, 1200, 900};
-
         DrawTexturePro(game_tex.texture, swapped, to, {MAP_X_CENTER, MAP_Y_CENTER}, 0, WHITE);
 
-        do_debug_draw();
         EndMode2D();
         EndDrawing();
     }
@@ -800,6 +849,8 @@ int main(int argc, char **argv) {
     UnloadSound(sounds[SOUND_SHOT_BULLET]);
     UnloadSound(sounds[SOUND_ENEMY_DIED]);
     UnloadSound(sounds[SOUND_TELEPORTED]);
+    UnloadSound(sounds[SOUND_SPAWN_ENEMY]);
+    UnloadMusicStream(game_music);
 
     CloseAudioDevice();
     CloseWindow();
