@@ -258,7 +258,7 @@ void do_enemy_update(Entity *e) {
 }
 
 void do_bullet_update(Entity *e) {
-    e->position = Vector2Add(e->position, e->direction);
+    e->position = Vector2Add(e->position, Vector2Scale(e->direction, timescaled_dt() * 60));
     Rectangle player_rec = { player.pos.x, player.pos.y, player.size.x, player.size.y };
     if (CheckCollisionCircleRec(e->position, 4, player_rec)) {
         if (!player.performing_walljump) {
@@ -312,7 +312,7 @@ void update_player_input(int x_axis, int charging, Vector2 mouse) {
 
     if (!player.performing_walljump) {
         // What a weird way to perform an acceleration.
-        accel = Lerp(accel, (x_axis * 8), 0.25);
+        accel = Lerp(accel, (x_axis * 8), 8 * timescaled_dt());
         Vector2 movedir = { -player.normal.y, -player.normal.x };
 
         Vector2 accele = Vector2Scale(movedir, accel);
@@ -401,6 +401,7 @@ void do_player_update() {
             PlaySoundMulti(sounds[SOUND_TELEPORTED]);
 
             if (game.captured_entity_count > 0) {
+                game.timescale = 0.01;
                 PlaySoundMulti(sounds[SOUND_ENEMY_DIED]);
             }
 
@@ -432,6 +433,9 @@ void game_update() {
         camera.offset.x = GetRandomValue(1, 50) * game.camerashake;
         camera.offset.y = GetRandomValue(1, 50) * game.camerashake;
     }
+
+    if(game.timescale < 1.0) game.timescale += (0.10);
+    else if(game.timescale > 1.0) game.timescale = 0;
 
     game.state_change_timer -= timescaled_dt();
     if (game.state_change_timer < 0.0) game.state_change_timer = 0.0;
@@ -475,7 +479,7 @@ void game_update() {
                         e->position.y = GetRandomValue((int)(MAP_Y_BEGIN + TILE_SIZE), (int)(MAP_Y_END - TILE_SIZE));
                         e->target = e->position;
 
-                        PlaySoundMulti(sounds[SOUND_SPAWN_ENEMY]);
+                        // PlaySoundMulti(sounds[SOUND_SPAWN_ENEMY]);
                     }
                 }
 
